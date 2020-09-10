@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	client "github.com/shakenfist/client-go"
@@ -23,6 +24,7 @@ var (
 	cloudInitFilename string
 	serverIP          string
 	deleteOnCallback  bool
+	waitAPI           int
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -71,9 +73,10 @@ func init() {
 		"", "This servers reachable IP address from within the instances")
 	rootCmd.PersistentFlags().IntVar(&delay, "delay",
 		1, "Delay between attempting to start instances")
-
 	rootCmd.PersistentFlags().StringVar(&cloudInitFilename, "cloudinit",
 		"phone-home.yaml", "Cloud init phone home YAML filename")
+	rootCmd.PersistentFlags().IntVar(&waitAPI, "wait",
+		10, "Total time to wait for successful cleanup command execution (secs)")
 
 	// Enable the use of environment variables
 	if err := viper.BindPFlags(rootCmd.PersistentFlags()); err != nil {
@@ -215,7 +218,7 @@ forever:
 			fmt.Printf("\nInstances: Started=%d Callbacks=%d Outstanding=%d\n",
 				started, callbackCount, len(Machines))
 			for i := range Machines {
-				fmt.Printf("  %d: %s  %s  %d\n",
+				fmt.Printf("  %3d: %s  %s  %d\n",
 					i, Machines[i].UUID, Machines[i].Node,
 					Machines[i].ConsolePort)
 			}
@@ -231,15 +234,37 @@ forever:
 	}
 
 	// Delete SF network used for this load test
-	if err = sysClient.DeleteNetwork(network.UUID); err != nil {
-		fmt.Printf("Error deleting created network (%s): %v\n",
-			network.UUID, err)
+	exitTime := time.Now().Add(time.Second * time.Duration(waitAPI))
+	for {
+		if err = sysClient.DeleteNetwork(network.UUID); err != nil {
+			status := strings.LastIndex(err.Error(), "status code: 403")
+			if status == -1 || time.Now().After(exitTime) {
+				fmt.Printf("Error deleting created network (%s): %v\n",
+					network.UUID, err)
+				break
+			}
+			fmt.Printf("  Network delete failed: %s...\n", err.Error()[status:])
+		} else {
+			break
+		}
+		time.Sleep(time.Second)
 	}
 
 	// Delete SF namespace used for this load test
-	if err := sysClient.DeleteNamespace(uniqueName); err != nil {
-		fmt.Printf("Error deleting created namespace (%s): %v\n",
-			uniqueName, err)
+	exitTime = time.Now().Add(time.Second * time.Duration(waitAPI))
+	for {
+		if err := sysClient.DeleteNamespace(uniqueName); err != nil {
+			status := strings.LastIndex(err.Error(), "status code: 403")
+			if status == -1 || time.Now().After(exitTime) {
+				fmt.Printf("Error deleting created namespace (%s): %v\n",
+					uniqueName, err)
+				break
+			}
+			fmt.Printf("  Namespace delete failed: %s...\n", err.Error()[status:])
+		} else {
+			break
+		}
+		time.Sleep(time.Second)
 	}
 }
 
